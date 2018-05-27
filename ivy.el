@@ -3317,12 +3317,7 @@ FACE is the face to apply to STR."
            0))
         (regexps
          (if (listp ivy--old-re)
-             (mapcar
-              #'car
-              (cl-remove-if
-               (lambda (regexp-cons)
-                 (null (cdr regexp-cons)))
-               ivy--old-re))
+             (mapcar #'car (cl-remove-if-not #'cdr ivy--old-re))
            (list ivy--old-re))))
     (dolist (re regexps)
       (ignore-errors
