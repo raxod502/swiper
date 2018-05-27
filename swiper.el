@@ -623,12 +623,7 @@ Matched candidates should have `swiper-invocation-face'."
       (let* ((regexp-or-regexps (funcall ivy--regex-function ivy-text))
              (regexps
               (if (listp regexp-or-regexps)
-                  (mapcar
-                   #'car
-                   (cl-remove-if
-                    (lambda (regexp-cons)
-                      (null (cdr regexp-cons)))
-                    regexp-or-regexps))
+                  (mapcar #'car (cl-remove-if-not #'cdr regexp-or-regexps))
                 (list regexp-or-regexps))))
         (dolist (re regexps)
           (let* ((re (replace-regexp-in-string
