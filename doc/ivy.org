@@ -64,7 +64,7 @@ final candidate is either through simple keyboard character inputs or
 through powerful regular expressions.
 #+TEXINFO: @end ifnottex
 
-Copyright (C) 2015 Free Software Foundation, Inc.
+Copyright (C) 2015-2018 Free Software Foundation, Inc.
 
 #+BEGIN_QUOTE
 Permission is granted to copy, distribute and/or modify this document
@@ -449,8 +449,9 @@ actions.
 - ~M-j~ (=ivy-yank-word=) ::
      Inserts the sub-word at point into the minibuffer.
 
-     This is similar to ~C-s C-w~ with =isearch=. Ivy reserves ~C-w~
-     for =kill-region=.
+     This is similar to ~C-s C-w~ with =isearch=.  Ivy reserves ~C-w~
+     for =kill-region=.  See also =ivy-yank-symbol= and
+     =ivy-yank-char=.
 
 - ~S-SPC~ (=ivy-restrict-to-matches=) ::
      Deletes the current input, and resets the candidates list to the

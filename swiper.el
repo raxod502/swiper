@@ -1,6 +1,6 @@
 ;;; swiper.el --- Isearch with an overview. Oh, man! -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015-2017  Free Software Foundation, Inc.
+;; Copyright (C) 2015-2018  Free Software Foundation, Inc.
 
 ;; Author: Oleh Krehel <ohwoeowho@gmail.com>
 ;; URL: https://github.com/abo-abo/swiper
@@ -432,6 +432,7 @@ When capture groups are present in the input, print them instead of lines."
                  'compilation-info))
          (re (progn (string-match "\"\\(.*\\)\"" (buffer-name))
                     (match-string 1 (buffer-name))))
+         (re (mapconcat #'identity (ivy--split re) ".*?"))
          (cands
           (mapcar
            (lambda (s)
@@ -634,6 +635,8 @@ Matched candidates should have `swiper-invocation-face'."
                           (string-to-number (match-string 0 str))
                         0)))
             (unless (memq this-command '(ivy-yank-word
+                                         ivy-yank-symbol
+                                         ivy-yank-char
                                          scroll-other-window))
               (when (cl-plusp num)
                 (unless (if swiper--current-line
@@ -697,10 +700,12 @@ WND, when specified is the window."
           ;; RE can become an invalid regexp
           (while (and (ignore-errors (re-search-forward re end t))
                       (> (- (match-end 0) (match-beginning 0)) 0))
-            ;; Don't highlight a match if it goes across
-            ;; multiple lines.
-            (unless (> (line-number-at-pos (match-end 0))
-                       (line-number-at-pos (match-beginning 0)))
+            ;; Don't highlight a match if it spans multiple
+            ;; lines. `count-lines' returns 1 if the match is within a
+            ;; single line, even if it includes the newline, and 2 or
+            ;; greater otherwise. We hope that the inclusion of the
+            ;; newline will not ever be a problem in practice.
+            (when (< (count-lines (match-beginning 0) (match-end 0)) 2)
               (unless (and (consp ivy--old-re)
                            (null
                             (save-match-data

@@ -1,6 +1,6 @@
 ;;; colir.el --- Color blending library -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015-2017  Free Software Foundation, Inc.
+;; Copyright (C) 2015-2018  Free Software Foundation, Inc.
 
 ;; Author: Oleh Krehel <ohwoeowho@gmail.com>
 
@@ -36,9 +36,10 @@
 (defcustom colir-compose-method #'colir-compose-alpha
   "Select a method to compose two color channels."
   :group 'ivy
-  :type '(radio (function-item colir-compose-alpha)
-                (function-item colir-compose-overlay)
-                (function-item colir-compose-soft-light)))
+  :type '(radio
+          (function-item colir-compose-alpha)
+          (function-item colir-compose-overlay)
+          (function-item colir-compose-soft-light)))
 
 (defun colir-compose-soft-light (a b)
   "Compose A and B channels."
