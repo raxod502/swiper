@@ -1908,14 +1908,7 @@ This is useful for recursive `ivy-read'."
                   (setq preselect (file-relative-name preselect
                                                       preselect-directory)))))
              (setq coll (ivy--sorted-files ivy--directory))
-             (when initial-input
-               (unless (or require-match
-                           (equal initial-input default-directory)
-                           (equal initial-input ""))
-                 (setq coll (cons initial-input coll)))
-               (unless (and (ivy-state-action ivy-last)
-                            (not (equal (ivy--get-action ivy-last) 'identity)))
-                 (setq initial-input nil))))
+             (setq initial-input nil))
             ((eq collection 'internal-complete-buffer)
              (setq coll (ivy--buffer-list "" ivy-use-virtual-buffers predicate)))
             (dynamic-collection
