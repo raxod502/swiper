@@ -24,7 +24,7 @@
 ;; see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
-;;
+
 ;; This package provides `ivy-read' as an alternative to
 ;; `completing-read' and similar functions.
 ;;
@@ -37,9 +37,11 @@
 ;; So "for example" is transformed into "\\(for\\).*\\(example\\)".
 
 ;;; Code:
+
 (require 'cl-lib)
 (require 'ffap)
 (require 'ivy-overlay)
+(require 'colir)
 
 ;;* Customization
 (defgroup ivy nil
@@ -155,7 +157,7 @@ Set this to \"(%d/%d) \" to display both the index and the count."
   "When non-nil, wrap around after the first and the last candidate."
   :type 'boolean)
 
-(defcustom ivy-display-style (unless (version< emacs-version "24.5") 'fancy)
+(defcustom ivy-display-style (and (fboundp 'add-face-text-property) 'fancy)
   "The style for formatting the minibuffer.
 
 By default, the matched strings are copied as is.
@@ -164,7 +166,7 @@ The fancy display style highlights matching parts of the regexp,
 a behavior similar to `swiper'.
 
 This setting depends on `add-face-text-property' - a C function
-available as of Emacs 24.5.  Fancy style will render poorly in
+available since Emacs 24.4.  Fancy style will render poorly in
 earlier versions of Emacs."
   :type '(choice
           (const :tag "Plain" nil)
@@ -845,7 +847,9 @@ contains a single candidate.")
        (ivy--cd dir)
        (ivy--exhibit))
       ((unless (string= ivy-text "")
-         (let ((file (expand-file-name ivy-text ivy--directory)))
+         (let ((file (expand-file-name
+                      (if (> ivy--length 0) (ivy-state-current ivy-last) ivy-text)
+                      ivy--directory)))
            (when (ignore-errors (file-exists-p file))
              (if (file-directory-p file)
                  (ivy--cd (file-name-as-directory file))
@@ -2604,7 +2608,7 @@ STD-PROPS is a property list containing the default text properties."
         (when (ivy--prompt-selectable-p)
           (if (or (= ivy--index -1)
                   (= ivy--length 0))
-              (add-face-text-property
+              (ivy-add-face-text-property
                (minibuffer-prompt-end) (line-end-position) 'ivy-prompt-match)
             (remove-list-of-text-properties
              (minibuffer-prompt-end) (line-end-position) '(face))))
@@ -2813,26 +2817,21 @@ Should be run via minibuffer `post-command-hook'."
           (when (> text-height body-height)
             (window-resize nil (- text-height body-height) nil t)))))))
 
-(declare-function colir-blend-face-background "ext:colir")
-
 (defun ivy--add-face (str face)
   "Propertize STR with FACE.
 `font-lock-append-text-property' is used, since it's better than
 `propertize' or `add-face-text-property' in this case."
-  (require 'colir)
-  (condition-case nil
-      (progn
-        (colir-blend-face-background 0 (length str) face str)
-        (let ((foreground (face-foreground face)))
-          (when foreground
-            (add-face-text-property
-             0 (length str)
-             `(:foreground ,foreground)
-             nil
-             str))))
-    (error
-     (ignore-errors
-       (font-lock-append-text-property 0 (length str) 'face face str))))
+  (let ((len (length str)))
+    (condition-case nil
+        (progn
+          (colir-blend-face-background 0 len face str)
+          (let ((foreground (face-foreground face)))
+            (when foreground
+              (ivy-add-face-text-property
+               0 len (list :foreground foreground) str))))
+      (error
+       (ignore-errors
+         (font-lock-append-text-property 0 len 'face face str)))))
   str)
 
 (declare-function flx-make-string-cache "ext:flx")
@@ -3274,14 +3273,20 @@ and SEPARATOR is used to join them."
    cands
    ""))
 
-(defun ivy-add-face-text-property (start end face str)
-  "Add face property to the text from START to END.
-FACE is the face to apply to STR."
+(defalias 'ivy-add-face-text-property
   (if (fboundp 'add-face-text-property)
-      (add-face-text-property
-       start end face nil str)
-    (font-lock-append-text-property
-     start end 'face face str)))
+      (lambda (start end face &optional object append)
+        (add-face-text-property start end face append object))
+    (lambda (start end face &optional object append)
+      (funcall (if append
+                   #'font-lock-append-text-property
+                 #'font-lock-prepend-text-property)
+               start end 'face face object)))
+  "Compatibility shim for `add-face-text-property'.
+Fall back on `font-lock-prepend-text-property' in Emacs versions
+prior to 24.4 (`font-lock-append-text-property' when APPEND is
+non-nil).
+Note: The usual last two arguments are flipped for convenience.")
 
 (defun ivy--highlight-ignore-order (str)
   "Highlight STR, using the ignore-order method."
@@ -3769,10 +3774,9 @@ Skip buffers that match `ivy-ignore-buffers'."
 
 (defun ivy-append-face (str face)
   "Append to STR the property FACE."
-  (let ((new (copy-sequence str)))
-    (font-lock-append-text-property
-     0 (length new) 'face face new)
-    new))
+  (setq str (copy-sequence str))
+  (ivy-add-face-text-property 0 (length str) face str t)
+  str)
 
 (defun ivy-switch-buffer-transformer (str)
   "Transform candidate STR when switching buffers."

@@ -6,7 +6,7 @@
 ;; URL: https://github.com/abo-abo/swiper
 ;; Version: 0.10.0
 ;; Package-Requires: ((emacs "24.3") (swiper "0.9.0"))
-;; Keywords: completion, matching
+;; Keywords: convenience, matching, tools
 
 ;; This file is part of GNU Emacs.
 
@@ -24,25 +24,23 @@
 ;; see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
-;;
+
 ;; Just call one of the interactive functions in this file to complete
 ;; the corresponding thing using `ivy'.
 ;;
 ;; Currently available:
-;; - Symbol completion for Elisp, Common Lisp, Python and Clojure.
+;; - Symbol completion for Elisp, Common Lisp, Python, Clojure, C, C++.
 ;; - Describe fuctions for Elisp: function, variable, library, command,
 ;;   bindings, theme.
-;; - Navigation functions: imenu, ace-line, semantic, outline
-;; - Git utilities: git-files, git-grep, git-log, git-stash.
-;; - Grep utitilies: grep, ag, pt, recoll.
+;; - Navigation functions: imenu, ace-line, semantic, outline.
+;; - Git utilities: git-files, git-grep, git-log, git-stash, git-checkout.
+;; - Grep utitilies: grep, ag, pt, recoll, ack, rg.
 ;; - System utilities: process list, rhythmbox, linux-app.
 ;; - Many more.
 
 ;;; Code:
 
 (require 'swiper)
-(require 'etags)
-(require 'esh-util)
 (require 'compile)
 (require 'dired)
 
@@ -125,8 +123,11 @@
   (ivy-add-prompt-count
    (format "%s: " (ivy-state-prompt ivy-last))))
 
+(declare-function eshell-split-path "esh-util")
+
 (defun counsel-prompt-function-dir ()
   "Return prompt appended with the parent directory."
+  (require 'esh-util)
   (ivy-add-prompt-count
    (let ((directory (ivy-state-directory ivy-last)))
      (format "%s [%s]: "
@@ -455,11 +456,21 @@ Update the minibuffer with the amount of lines collected every
   (interactive)
   (ivy-exit-with-action #'counsel-info-lookup-symbol))
 
+(defvar find-tag-marker-ring)
+(declare-function xref-push-marker-stack "xref")
+
+(defalias 'counsel--push-xref-marker
+  (if (require 'xref nil t)
+      #'xref-push-marker-stack
+    (require 'etags)
+    (lambda (&optional m)
+      (ring-insert find-tag-marker-ring (or m (point-marker)))))
+  "Compatibility shim for `xref-push-marker-stack'.")
+
 (defun counsel--find-symbol (x)
   "Find symbol definition that corresponds to string X."
   (with-ivy-window
-    (with-no-warnings
-      (ring-insert find-tag-marker-ring (point-marker)))
+    (counsel--push-xref-marker)
     (let ((full-name (get-text-property 0 'full-name x)))
       (if full-name
           (find-library full-name)
@@ -1313,14 +1324,12 @@ Typical value: '(recenter)."
 (defun counsel-git-grep-transformer (str)
   "Higlight file and line number in STR."
   (when (string-match "\\`\\([^:]+\\):\\([^:]+\\):" str)
-    (add-face-text-property (match-beginning 1)
-                            (match-end 1)
-                            'compilation-info
-                            nil str)
-    (add-face-text-property (match-beginning 2)
-                            (match-end 2)
-                            'compilation-line-number
-                            nil str))
+    (ivy-add-face-text-property (match-beginning 1) (match-end 1)
+                                'compilation-info
+                                str)
+    (ivy-add-face-text-property (match-beginning 2) (match-end 2)
+                                'compilation-line-number
+                                str))
   str)
 
 (defvar counsel-git-grep-projects-alist nil
@@ -1590,7 +1599,6 @@ done") "\n" t)))
   (message "%S" (kill-new x)))
 
 ;;** `counsel-git-change-worktree'
-(autoload 'string-trim-right "subr-x")
 (defun counsel-git-change-worktree-action (git-root-dir tree)
   "Find the corresponding file in the worktree located at tree.
 The current buffer is assumed to be in a subdirectory of GIT-ROOT-DIR.
@@ -1602,9 +1610,8 @@ TREE is the selected candidate."
 
 (defun counsel-git-worktree-list ()
   "List worktrees in the git repository containing the current buffer."
-  (let* ((default-directory (counsel-locate-git-root))
-         (cmd-output (shell-command-to-string "git worktree list")))
-    (delete "" (split-string (string-trim-right cmd-output) "\n"))))
+  (let ((default-directory (counsel-locate-git-root)))
+    (split-string (shell-command-to-string "git worktree list") "\n" t)))
 
 (defun counsel-git-worktree-parse-root (tree)
   "Return worktree from candidate TREE."
@@ -1648,16 +1655,15 @@ BRANCH is a string whose first word designates the command argument."
    (format "git checkout %s" (substring branch 0 (string-match " " branch)))))
 
 (defun counsel-git-branch-list ()
-  "List branches in the git repository containing the current buffer.
-
-Does not list the currently checked out one."
-  (let* ((default-directory (counsel-locate-git-root))
-         (cmd-output (shell-command-to-string "git branch -vv --all")))
-    (cl-mapcan
-     (lambda (str)
-       (when (string-prefix-p " " str)
-         (list (substring str (string-match "[^[:blank:]]" str)))))
-     (split-string (string-trim-right cmd-output) "\n"))))
+  "Return list of branches in the current git repository.
+Value comprises all local and remote branches bar the one
+currently checked out."
+  (cl-mapcan (lambda (line)
+               (and (string-match "\\`[[:blank:]]+" line)
+                    (list (substring line (match-end 0)))))
+             (let ((default-directory (counsel-locate-git-root)))
+               (split-string (shell-command-to-string "git branch -vv --all")
+                             "\n" t))))
 
 ;;;###autoload
 (defun counsel-git-checkout ()
@@ -2163,7 +2169,7 @@ string - the full shell command to run."
 (defun counsel-locate-cmd-es (input)
   "Return a shell command based on INPUT."
   (counsel-require-program "es.exe")
-  (format "es.exe -i -r %s"
+  (format "es.exe -i -r -p %s"
           (counsel-unquote-regex-parens
            (ivy--regex input t))))
 
@@ -3276,6 +3282,7 @@ include attachments of other Org buffers."
 (defun counsel-org-agenda-headlines ()
   "Choose from headers of `org-mode' files in the agenda."
   (interactive)
+  (require 'org)
   (let ((minibuffer-allow-text-properties t))
     (ivy-read "Org headline: "
               (counsel-org-agenda-headlines--candidates)
