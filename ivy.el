@@ -1941,7 +1941,10 @@ This is useful for recursive `ivy-read'."
                  (and (listp collection) (symbolp (car collection))))
              (setq coll (all-completions "" collection predicate)))
             (t
-             (setq coll collection)))
+             (setq coll
+                   (if predicate
+                       (cl-remove-if-not predicate collection)
+                     collection))))
       (unless (ivy-state-dynamic-collection ivy-last)
         (setq coll (delete "" coll)))
       (when def
@@ -2190,7 +2193,8 @@ See `completion-in-region' for further information."
                               (replace-regexp-in-string "%" "%%" prompt))
                             ;; remove 'completions-first-difference face
                             (mapcar #'substring-no-properties comps)
-                            :predicate predicate
+                            ;; predicate was already applied by `completion-all-completions'
+                            :predicate nil
                             :initial-input initial
                             :sort t
                             :action #'ivy-completion-in-region-action
@@ -3049,7 +3053,9 @@ RE-STR is the regexp, CANDS are the current candidates."
          (func (or (and caller (cdr (assoc caller ivy-index-functions-alist)))
                    (cdr (assoc t ivy-index-functions-alist))
                    #'ivy-recompute-index-zero))
-         (case-fold-search (ivy--case-fold-p name)))
+         (case-fold-search (ivy--case-fold-p name))
+         (preselect (ivy-state-preselect ivy-last))
+         (current (ivy-state-current ivy-last)))
     (unless (eq this-command 'ivy-resume)
       (ivy-set-index
        (or
@@ -3070,16 +3076,24 @@ RE-STR is the regexp, CANDS are the current candidates."
              (not (and ivy--flx-featurep
                        (eq ivy--regex-function 'ivy--regex-fuzzy)
                        (< (length cands) 200)))
+             ;; If there was a preselected candidate, don't try to
+             ;; keep it selected even if the regexp still matches it.
+             ;; See issue #1563.  See also `ivy--preselect-index',
+             ;; which this logic roughly mirrors.
+             (not (or
+                   (and (integerp preselect)
+                        (= ivy--index preselect))
+                   (equal current preselect)
+                   (and (stringp preselect)
+                        (stringp current)
+                        (string-match-p preselect current))))
              ivy--old-cands
-             (cl-position (ivy-state-current ivy-last) cands
-                          :test #'equal))
+             (cl-position current cands :test #'equal))
         (funcall func re-str cands))))
     (when (or (string= name "")
               (string= name "^"))
       (ivy-set-index
-       (or (ivy--preselect-index
-            (ivy-state-preselect ivy-last)
-            cands)
+       (or (ivy--preselect-index preselect cands)
            ivy--index)))))
 
 (defun ivy-recompute-index-swiper (_re-str cands)
