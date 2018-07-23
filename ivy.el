@@ -1932,7 +1932,8 @@ This is useful for recursive `ivy-read'."
                (ignore-errors
                  ;; cm can be read-only
                  (dolist (cm coll)
-                   (add-text-properties 0 1 `(idx ,i) cm)
+                   ;; temporary hack around https://github.com/abo-abo/swiper/issues/1680
+                   ;; (add-text-properties 0 1 `(idx ,i) cm)
                    (cl-incf i)))))
             ((or (functionp collection)
                  (byte-code-function-p collection)
