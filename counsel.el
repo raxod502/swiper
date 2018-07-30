@@ -45,10 +45,20 @@
 (require 'dired)
 
 ;;* Utility
-(defun counsel-more-chars (n)
-  "Return two fake candidates prompting for at least N input."
-  (list ""
-        (format "%d chars more" (- n (length ivy-text)))))
+(defvar counsel-more-chars-alist
+  '((counsel-grep . 2)
+    (t . 3))
+  "Map commands to their minimum required input length.
+That is the number of characters prompted for before fetching
+candidates.  The special key t is used as a fallback.")
+
+(defun counsel-more-chars ()
+  "Return two fake candidates prompting for at least N input.
+N is obtained from `counsel-more-chars-alist'."
+  (let ((diff (- (ivy-alist-setting counsel-more-chars-alist)
+                 (length ivy-text))))
+    (when (> diff 0)
+      (list "" (format "%d chars more" diff)))))
 
 (defun counsel-unquote-regex-parens (str)
   "Unquote regex parenthesis in STR."
@@ -398,6 +408,10 @@ Update the minibuffer with the amount of lines collected every
               :action #'ivy-completion-in-region-action)))
 
 ;;** `counsel-irony'
+(declare-function irony-completion-candidates-async "ext:irony-completion")
+(declare-function irony-completion-symbol-bounds "ext:irony-completion")
+(declare-function irony-completion-annotation "ext:irony-completion")
+
 ;;;###autoload
 (defun counsel-irony ()
   "Inline C/C++ completion using Irony."
@@ -425,10 +439,6 @@ Update the minibuffer with the amount of lines collected every
         (car x)))
 
 (add-to-list 'ivy-display-functions-alist '(counsel-irony . ivy-display-function-overlay))
-
-(declare-function irony-completion-candidates-async "ext:irony-completion")
-(declare-function irony-completion-symbol-bounds "ext:irony-completion")
-(declare-function irony-completion-annotation "ext:irony-completion")
 
 ;;* Elisp symbols
 ;;** `counsel-describe-variable'
@@ -460,11 +470,11 @@ Update the minibuffer with the amount of lines collected every
 (declare-function xref-push-marker-stack "xref")
 
 (defalias 'counsel--push-xref-marker
-  (if (require 'xref nil t)
-      #'xref-push-marker-stack
-    (require 'etags)
-    (lambda (&optional m)
-      (ring-insert find-tag-marker-ring (or m (point-marker)))))
+    (if (require 'xref nil t)
+        #'xref-push-marker-stack
+      (require 'etags)
+      (lambda (&optional m)
+        (ring-insert (with-no-warnings find-tag-marker-ring) (or m (point-marker)))))
   "Compatibility shim for `xref-push-marker-stack'.")
 
 (defun counsel--find-symbol (x)
@@ -1271,18 +1281,18 @@ Typical value: '(recenter)."
   :type 'hook
   :group 'ivy)
 
-(defun counsel-git-grep-function (string &optional _pred &rest _unused)
+(defun counsel-git-grep-function (str &optional _pred &rest _unused)
   "Grep in the current git repository for STRING."
-  (if (and (> counsel--git-grep-count counsel--git-grep-count-threshold)
-           (< (length string) 3))
-      (counsel-more-chars 3)
-    (let* ((default-directory (ivy-state-directory ivy-last))
-           (cmd (format counsel-git-grep-cmd
-                        (setq ivy--old-re (ivy--regex string t)))))
-      (if (<= counsel--git-grep-count counsel--git-grep-count-threshold)
-          (split-string (shell-command-to-string cmd) "\n" t)
-        (counsel--gg-candidates (ivy--regex string))
-        nil))))
+  (or
+   (and (> counsel--git-grep-count counsel--git-grep-count-threshold)
+        (counsel-more-chars))
+   (let* ((default-directory (ivy-state-directory ivy-last))
+          (cmd (format counsel-git-grep-cmd
+                       (setq ivy--old-re (ivy--regex str t)))))
+     (if (<= counsel--git-grep-count counsel--git-grep-count-threshold)
+         (split-string (shell-command-to-string cmd) "\n" t)
+       (counsel--gg-candidates (ivy--regex str))
+       nil))))
 
 (defun counsel-git-grep-action (x)
   "Go to occurrence X in current Git repository."
@@ -1413,15 +1423,16 @@ INITIAL-INPUT can be given as the initial minibuffer input."
                 :unwind unwind-function
                 :history 'counsel-git-grep-history
                 :caller 'counsel-git-grep))))
+(cl-pushnew 'counsel-git-grep ivy-highlight-grep-commands)
 
 (defun counsel-git-grep-proj-function (str)
   "Grep for STR in the current git repository."
-  (if (< (length str) 3)
-      (counsel-more-chars 3)
-    (let ((regex (setq ivy--old-re
-                       (ivy--regex str t))))
-      (counsel--async-command (format counsel-git-grep-cmd regex))
-      nil)))
+  (or
+   (counsel-more-chars)
+   (let ((regex (setq ivy--old-re
+                      (ivy--regex str t))))
+     (counsel--async-command (format counsel-git-grep-cmd regex))
+     nil)))
 
 (defun counsel-git-grep-switch-cmd ()
   "Set `counsel-git-grep-cmd' to a different value."
@@ -1585,19 +1596,20 @@ done") "\n" t)))
 (defvar counsel-git-log-split-string-re "\ncommit "
   "The `split-string' separates when split output of `counsel-git-log-cmd'.")
 
-(defun counsel-git-log-function (input)
-  "Search for INPUT in git log."
-  (if (< (length input) 3)
-      (counsel-more-chars 3)
-    ;; `counsel--yank-pop-format-function' uses this
-    (setq ivy--old-re (funcall ivy--regex-function input))
-    (counsel--async-command
-     ;; "git log --grep" likes to have groups quoted e.g. \(foo\).
-     ;; But it doesn't like the non-greedy ".*?".
-     (format counsel-git-log-cmd
-             (replace-regexp-in-string "\\.\\*\\?" ".*"
-                                       (ivy-re-to-str ivy--old-re))))
-    nil))
+(defun counsel-git-log-function (str)
+  "Search for STR in git log."
+  (or
+   (counsel-more-chars)
+   (progn
+     ;; `counsel--yank-pop-format-function' uses this
+     (setq ivy--old-re (funcall ivy--regex-function str))
+     (counsel--async-command
+      ;; "git log --grep" likes to have groups quoted e.g. \(foo\).
+      ;; But it doesn't like the non-greedy ".*?".
+      (format counsel-git-log-cmd
+              (replace-regexp-in-string "\\.\\*\\?" ".*"
+                                        (ivy-re-to-str ivy--old-re))))
+     nil)))
 
 (defun counsel-git-log-action (x)
   "Add candidate X to kill ring."
@@ -1748,6 +1760,20 @@ currently checked out."
         (find-alternate-file file-name)
       (find-file file-name))))
 
+(defun counsel-find-file-delete (x)
+  "Delete file X."
+  (dired-delete-file x dired-recursive-deletes delete-by-moving-to-trash))
+
+(defun counsel-find-file-move (x)
+  "Move or rename file X."
+  (ivy-read "Rename file to: " 'read-file-name-internal
+            :matcher #'counsel--find-file-matcher
+            :action (lambda (new-name)
+                      (require 'dired-aux)
+                      (dired-rename-file x new-name 1))
+            :keymap counsel-find-file-map
+            :caller 'counsel-find-file-move))
+
 (defun counsel-find-file-mkdir-action (_x)
   (make-directory (expand-file-name ivy-text ivy--directory)))
 
@@ -1758,6 +1784,8 @@ currently checked out."
    ("b" counsel-find-file-cd-bookmark-action "cd bookmark")
    ("x" counsel-find-file-extern "open externally")
    ("r" counsel-find-file-as-root "open as root")
+   ("k" counsel-find-file-delete "delete")
+   ("m" counsel-find-file-move "move or rename")
    ("d" counsel-find-file-mkdir-action "mkdir")))
 
 (defcustom counsel-find-file-at-point nil
@@ -2125,6 +2153,7 @@ string - the full shell command to run."
 (ivy-set-actions
  'counsel-locate
  '(("x" counsel-locate-action-extern "xdg-open")
+   ("r" counsel-find-file-as-root "open as root")
    ("d" counsel-locate-action-dired "dired")))
 
 (counsel-set-async-exit-code 'counsel-locate 1 "Nothing found")
@@ -2180,11 +2209,12 @@ string - the full shell command to run."
 
 (defun counsel-locate-function (input)
   "Call the \"locate\" shell command with INPUT."
-  (if (< (length input) 3)
-      (counsel-more-chars 3)
-    (counsel--async-command
-     (funcall counsel-locate-cmd input))
-    '("" "working...")))
+  (or
+   (counsel-more-chars)
+   (progn
+     (counsel--async-command
+      (funcall counsel-locate-cmd input))
+     '("" "working..."))))
 
 ;;;###autoload
 (defun counsel-locate (&optional initial-input)
@@ -2425,18 +2455,18 @@ regex string."
 (ivy-set-occur 'counsel-ag 'counsel-ag-occur)
 (ivy-set-display-transformer 'counsel-ag 'counsel-git-grep-transformer)
 
-(defun counsel-ag-function (string)
+(defun counsel-ag-function (str)
   "Grep in the current directory for STRING using BASE-CMD.
 If non-nil, append EXTRA-AG-ARGS to BASE-CMD."
-  (if (< (length string) 3)
-      (counsel-more-chars 3)
-    (let ((default-directory (ivy-state-directory ivy-last))
-          (regex (counsel-unquote-regex-parens
-                  (setq ivy--old-re
-                        (ivy--regex string)))))
-      (counsel--async-command (format counsel-ag-command
-                                      (shell-quote-argument regex)))
-      nil)))
+  (or
+   (counsel-more-chars)
+   (let ((default-directory (ivy-state-directory ivy-last))
+         (regex (counsel-unquote-regex-parens
+                 (setq ivy--old-re
+                       (ivy--regex str)))))
+     (counsel--async-command (format counsel-ag-command
+                                     (shell-quote-argument regex)))
+     nil)))
 
 ;;;###autoload
 (defun counsel-ag (&optional initial-input initial-directory extra-ag-args ag-prompt)
@@ -2461,17 +2491,16 @@ AG-PROMPT, if non-nil, is passed as `ivy-read' prompt argument."
                                      (car (split-string counsel-ag-command)))))))
   (when (null extra-ag-args)
     (setq extra-ag-args ""))
-  (let* ((args-end (string-match " -- " extra-ag-args))
+  (let* ((args-end (string-match "-- " extra-ag-args))
          (file (if args-end
-                   (substring-no-properties extra-ag-args (+ args-end 3))
+                   (substring-no-properties extra-ag-args (match-end 0))
                  ""))
          (extra-ag-args (if args-end
                             (substring-no-properties extra-ag-args 0 args-end)
                           extra-ag-args)))
     (setq counsel-ag-command (format counsel-ag-command
                                      (concat extra-ag-args
-                                             " -- "
-                                             "%s"
+                                             " -- %s "
                                              file))))
   (ivy-set-prompt 'counsel-ag counsel-prompt-function)
   (let ((default-directory (or initial-directory
@@ -2488,6 +2517,7 @@ AG-PROMPT, if non-nil, is passed as `ivy-read' prompt argument."
                         (counsel-delete-process)
                         (swiper--cleanup))
               :caller 'counsel-ag)))
+(cl-pushnew 'counsel-ag ivy-highlight-grep-commands)
 
 (defun counsel-grep-like-occur (cmd-template)
   (unless (eq major-mode 'ivy-occur-grep-mode)
@@ -2530,6 +2560,7 @@ This uses `counsel-ag' with `counsel-pt-base-command' instead of
   (interactive)
   (let ((counsel-ag-base-command counsel-pt-base-command))
     (counsel-ag initial-input)))
+(cl-pushnew 'counsel-pt ivy-highlight-grep-commands)
 
 ;;** `counsel-ack'
 (defcustom counsel-ack-base-command
@@ -2574,6 +2605,7 @@ RG-PROMPT, if non-nil, is passed as `ivy-read' prompt argument."
   (interactive)
   (let ((counsel-ag-base-command counsel-rg-base-command))
     (counsel-ag initial-input initial-directory extra-rg-args rg-prompt)))
+(cl-pushnew 'counsel-rg ivy-highlight-grep-commands)
 
 ;;** `counsel-grep'
 (defcustom counsel-grep-base-command "grep -E -n -e %s %s"
@@ -2588,14 +2620,14 @@ substituted by the search regexp and file, respectively.  Neither
 
 (defun counsel-grep-function (string)
   "Grep in the current directory for STRING."
-  (if (< (length string) 2)
-      (counsel-more-chars 2)
-    (let ((regex (counsel-unquote-regex-parens
-                  (setq ivy--old-re
-                        (ivy--regex string)))))
-      (counsel--async-command
-       (format counsel-grep-command (shell-quote-argument regex)))
-      nil)))
+  (or
+   (counsel-more-chars)
+   (let ((regex (counsel-unquote-regex-parens
+                 (setq ivy--old-re
+                       (ivy--regex string)))))
+     (counsel--async-command
+      (format counsel-grep-command (shell-quote-argument regex)))
+     nil)))
 
 (defun counsel-grep-action (x)
   "Go to candidate X."
@@ -2709,14 +2741,15 @@ When non-nil, INITIAL-INPUT is the initial search pattern."
     (counsel-grep initial-input)))
 
 ;;** `counsel-recoll'
-(defun counsel-recoll-function (string)
-  "Run recoll for STRING."
-  (if (< (length string) 3)
-      (counsel-more-chars 3)
-    (counsel--async-command
-     (format "recoll -t -b %s"
-             (shell-quote-argument string)))
-    nil))
+(defun counsel-recoll-function (str)
+  "Run recoll for STR."
+  (or
+   (counsel-more-chars)
+   (progn
+     (counsel--async-command
+      (format "recoll -t -b %s"
+              (shell-quote-argument str)))
+     nil)))
 
 ;; This command uses the recollq command line tool that comes together
 ;; with the recoll (the document indexing database) source:
@@ -2863,6 +2896,7 @@ otherwise continue prompting for tags."
 (declare-function org-global-tags-completion-table "org")
 (declare-function org-agenda-files "org")
 (declare-function org-agenda-set-tags "org-agenda")
+(declare-function org-tags-completion-function "org")
 
 ;;;###autoload
 (defun counsel-org-tag ()
@@ -2881,21 +2915,23 @@ otherwise continue prompting for tags."
       (unless (org-at-heading-p)
         (org-back-to-heading t))
       (setq counsel-org-tags (split-string (org-get-tags-string) ":" t)))
-    (let ((org-setting-tags t)
-          (org-last-tags-completion-table
-           (append org-tag-persistent-alist
-                   (or org-tag-alist (org-get-buffer-tags))
-                   (and
-                    (or org-complete-tags-always-offer-all-agenda-tags
-                        (eq major-mode 'org-agenda-mode))
-                    (org-global-tags-completion-table
-                     (org-agenda-files))))))
+    (let ((org-last-tags-completion-table
+           (append (and (or org-complete-tags-always-offer-all-agenda-tags
+                            (eq major-mode 'org-agenda-mode))
+                        (org-global-tags-completion-table
+                         (org-agenda-files)))
+                   (unless (boundp 'org-current-tag-alist)
+                     org-tag-persistent-alist)
+                   (or (if (boundp 'org-current-tag-alist)
+                           org-current-tag-alist
+                         org-tag-alist)
+                       (org-get-buffer-tags)))))
       (ivy-read (counsel-org-tag-prompt)
-                (lambda (str &rest _unused)
+                (lambda (str _pred _action)
                   (delete-dups
-                   (all-completions str 'org-tags-completion-function)))
+                   (all-completions str #'org-tags-completion-function)))
                 :history 'org-tags-history
-                :action 'counsel-org-tag-action
+                :action #'counsel-org-tag-action
                 :caller 'counsel-org-tag))))
 
 ;;;###autoload
@@ -3056,45 +3092,9 @@ version.  Argument values are based on the
 
 (defun counsel-org-goto--get-headlines ()
   "Get all headlines from the current org buffer."
-  (save-excursion
-    (let (entries
-          start-pos
-          stack
-          (stack-level 0)
-          (heading-args (counsel--org-get-heading-args)))
-      (goto-char (point-min))
-      (setq start-pos (or (and (org-at-heading-p)
-                               (point))
-                          (outline-next-heading)))
-      (while start-pos
-        (let ((name (or (apply #'org-get-heading heading-args) ""))
-              level)
-          (search-forward " ")
-          (setq level
-                (- (length (buffer-substring-no-properties start-pos (point)))
-                   1))
-          (cond ((eq counsel-org-headline-display-style 'path)
-                 ;; Update stack. The empty entry guards against incorrect
-                 ;; headline hierarchies e.g. a level 3 headline immediately
-                 ;; following a level 1 entry.
-                 (while (<= level stack-level)
-                   (pop stack)
-                   (cl-decf stack-level))
-                 (while (> level stack-level)
-                   (push "" stack)
-                   (cl-incf stack-level))
-                 (setf (car stack) (counsel-org-goto--add-face name level))
-                 (setq name (mapconcat
-                             #'identity
-                             (reverse stack)
-                             counsel-org-headline-path-separator)))
-                (t
-                 (when (eq counsel-org-headline-display-style 'headline)
-                   (setq name (concat (make-string level ?*) " " name)))
-                 (setq name (counsel-org-goto--add-face name level))))
-          (push (cons name (point-marker)) entries))
-        (setq start-pos (outline-next-heading)))
-      (nreverse entries))))
+  (counsel-outline-candidates
+   '(:outline-title counsel-outline-title-org
+     :action counsel-org-goto-action)))
 
 (defun counsel-org-goto--add-face (name level)
   "Add face to headline NAME on LEVEL.
@@ -3189,8 +3189,11 @@ include attachments of other Org buffers."
 
 ;;** `counsel-org-capture'
 (defvar org-capture-templates)
+(defvar org-capture-templates-contexts)
+(declare-function org-contextualize-keys "org")
 (declare-function org-capture-goto-last-stored "org-capture")
 (declare-function org-capture-goto-target "org-capture")
+(declare-function org-capture-upgrade-templates "org-capture")
 
 ;;;###autoload
 (defun counsel-org-capture ()
@@ -3203,7 +3206,11 @@ include attachments of other Org buffers."
                    (lambda (x)
                      (when (> (length x) 2)
                        (format "%-5s %s" (nth 0 x) (nth 1 x))))
-                   (or org-capture-templates
+                   ;; We build the list of capture templates as in
+                   ;; `org-capture-select-template':
+                   (or (org-contextualize-keys
+                        (org-capture-upgrade-templates org-capture-templates)
+                        org-capture-templates-contexts)
                        '(("t" "Task" entry (file+headline "" "Tasks")
                           "* TODO %?\n  %u\n  %a")))))
             :require-match t
@@ -3976,30 +3983,173 @@ TREEP is used to expand internal nodes."
     (counsel-imenu)))
 
 ;;** `counsel-outline'
-(defun counsel-outline-candidates ()
+(defvar counsel-outline-settings
+  '((emacs-lisp-mode
+     :outline-regexp ";;[;*]+[\s\t]+"
+     :outline-level counsel-outline-level-emacs-lisp)
+    (org-mode
+     :outline-title counsel-outline-title-org
+     :action counsel-org-goto-action)
+    (markdown-mode
+     :outline-title counsel-outline-title-markdown)
+    (latex-mode
+     :outline-title counsel-outline-title-latex))
+  "An alist holding `counsel-outline' settings for particular
+major modes.
+
+Each entry is a pair \(MAJOR-MODE . PLIST\).  `counsel-outline'
+checks whether an entry exists for the current buffer's
+MAJOR-MODE and, if so, loads the settings specified by PLIST
+instead of the default settings.  The following settings are
+recognized:
+
+- `:outline-regexp' is a regexp to match the beggining of an
+  outline heading.  It is only checked at the start of a line and
+  so need not start with `^'.  The default is to use the value of
+  the variable `outline-regexp'.
+
+- `:outline-level' is a function of no args to compute the level of
+  an outline heading.  It is called with point at the beginning
+  of `outline-regexp' and with the match data reflicting
+  `outline-regexp'.  The default is to use the value of the
+  variable `outline-level'.
+
+- `:outline-title' is a function of no args to get the title of an
+  outline heading.  It is called with point at the end of
+  `outline-regexp' and with the match data reflicting
+  `outline-regexp'.  The default is to use the function
+  `counsel-outline-title'.
+
+- `:action' is a function of one arg, a marker corresponding to the
+  beginning of the selected outline heading, performing
+  `counsel-outline''s action to jump to this heading.  The
+  default is to use the function `counsel-outline-action'.")
+
+(defun counsel-outline-title ()
+  "Default function used by `counsel-outline' to get the title of
+the current outline heading. See `counsel-outline-settings'."
+  (buffer-substring (point) (line-end-position)))
+
+(defun counsel-outline-title-org ()
+  "Function used by `counsel-outline' to get the title of the
+current outline heading in org-mode buffers. See
+`counsel-outline-settings'."
+  (apply 'org-get-heading (counsel--org-get-heading-args)))
+
+(defun counsel-outline-title-markdown ()
+  "Function used by `counsel-outline' to get the title of the
+current outline heading in markdown-mode buffers. See
+`counsel-outline-title'."
+  ;; `outline-regexp' is set by `markdown-mode' to match both setext
+  ;; (underline) and atx (hash) headings (see
+  ;; `markdown-regex-header').
+  (or (match-string 1) ; setext heading title
+      (match-string 5))) ; atx heading title
+
+(defvar LaTeX-section-list)
+
+(defun counsel-outline-title-latex ()
+  "Function used by `counsel-outline' to get the title of the
+current outline heading in latex-mode buffers. See
+`counsel-outline-settings'."
+  ;; `outline-regexp' is set by `latex-mode' (see
+  ;; `LaTeX-outline-regexp') to match section macros, in which case we
+  ;; get the section name, as well as `\appendix', `\documentclass',
+  ;; `\begin{document}' and `\end{document}', in which case we simply
+  ;; return that.
+  (if (and (assoc (match-string 1) LaTeX-section-list) ;; section macro
+           (progn ; point is at end of macro name, skip stars and optional args
+             (skip-chars-forward "*")
+             (while (looking-at "\\[")
+               (forward-list))
+             (looking-at "{"))) ; first mandatory arg should be section title
+      (buffer-substring (1+ (point)) (1- (forward-list)))
+    (buffer-substring (line-beginning-position) (point))))
+
+(defun counsel-outline-level-emacs-lisp ()
+  "Function used by `counsel-outline' to compute the level of the
+current outline heading in emacs-lisp-mode buffers. See
+`counsel-outline-settings'."
+  (if (looking-at ";;\\([;*]+\\)")
+      (length (match-string 1))
+    (funcall outline-level)))
+
+(defvar counsel-outline--preselect nil
+  "Index of the presected candidate in `counsel-outline'.")
+
+(defun counsel-outline-candidates (&optional settings)
   "Return outline candidates."
-  (let (cands)
+  (let ((bol-regex (concat "^\\(?:"
+                           (or (plist-get settings :outline-regexp)
+                               outline-regexp)
+                           "\\)"))
+        (outline-title-fn (or (plist-get settings :outline-title)
+                              'counsel-outline-title))
+        (outline-level-fn (or (plist-get settings :outline-level)
+                              outline-level)))
     (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward outline-regexp nil t)
-        (skip-chars-forward " ")
-        (push (cons (buffer-substring-no-properties
-                     (point) (line-end-position))
-                    (line-beginning-position))
-              cands))
-      (nreverse cands))))
+      (let (cands
+            name
+            level
+            marker
+            stack
+            (stack-level 0)
+            (orig-point (point)))
+        (setq counsel-outline--preselect 0)
+        (goto-char (point-min))
+        (while (re-search-forward bol-regex nil t)
+          (save-excursion
+            (setq name (or (save-match-data
+                             (funcall outline-title-fn))
+                           ""))
+            (goto-char (match-beginning 0))
+            (setq marker (point-marker))
+            (setq level (funcall outline-level-fn))
+            (cond ((eq counsel-org-headline-display-style 'path)
+                   ;; Update stack. The empty entry guards against incorrect
+                   ;; headline hierarchies e.g. a level 3 headline immediately
+                   ;; following a level 1 entry.
+                   (while (<= level stack-level)
+                     (pop stack)
+                     (cl-decf stack-level))
+                   (while (> level stack-level)
+                     (push "" stack)
+                     (cl-incf stack-level))
+                   (setf (car stack) (counsel-org-goto--add-face name level))
+                   (setq name (mapconcat
+                               #'identity
+                               (reverse stack)
+                               counsel-org-headline-path-separator)))
+                  (t
+                   (when (eq counsel-org-headline-display-style 'headline)
+                     (setq name (concat (make-string level ?*) " " name)))
+                   (setq name (counsel-org-goto--add-face name level))))
+            (push (cons name marker) cands))
+          (unless (or (string= name "")
+                      (< orig-point marker))
+            (cl-incf counsel-outline--preselect)))
+        (nreverse cands)))))
 
 (defun counsel-outline-action (x)
   "Go to outline X."
-  (with-ivy-window
-    (goto-char (cdr x))))
+    (goto-char (cdr x)))
 
 ;;;###autoload
 (defun counsel-outline ()
-  "Jump to outline with completion."
+  "Jump to outline with completion.
+
+This command relies on `outline-regexp', `outline-level', and
+`counsel-outline-title' to match an outline heading and get its
+level and title, respectively.  For major modes where this is not
+adequate or optimal, these variables can be rebound locally in
+the major mode hook.  Replacements are provided for some such
+modes. To set them up, add this to your init file:"
   (interactive)
-  (ivy-read "outline: " (counsel-outline-candidates)
-            :action #'counsel-outline-action))
+  (let ((settings (cdr (assoc major-mode counsel-outline-settings))))
+    (ivy-read "outline: " (counsel-outline-candidates settings)
+              :action (or (plist-get settings :action)
+                          #'counsel-outline-action)
+              :preselect (max (1- counsel-outline--preselect) 0))))
 
 ;;** `counsel-ibuffer'
 (defvar counsel-ibuffer--buffer-name nil

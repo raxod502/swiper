@@ -253,6 +253,9 @@ It is a list of (CALLER . HEIGHT).  CALLER is a caller of
 If `(minibuffer-depth)' equals this, `ivy-completing-read' will
 act as if `ivy-completing-read-handlers-alist' is empty.")
 
+(defvar ivy-highlight-grep-commands nil
+  "List of counsel grep-like commands.")
+
 (defvar ivy--actions-list nil
   "A list of extra actions per command.")
 
@@ -1645,6 +1648,14 @@ Directories come first."
           (cl-remove-if-not predicate seq)
         seq))))
 
+(defun ivy-alist-setting (alist &optional key)
+  "Return the value associated with KEY in ALIST, using `assq'.
+KEY defaults to the last caller of `ivy-read'; if no entry is
+found, it falls back to the key t."
+  (cdr (or (let ((caller (or key (ivy-state-caller ivy-last))))
+             (and caller (assq caller alist)))
+           (assq t alist))))
+
 ;;** Entry Point
 ;;;###autoload
 (cl-defun ivy-read (prompt collection
@@ -1743,8 +1754,7 @@ customizations apply to the current completion session."
         (ivy-display-function
          (unless (window-minibuffer-p)
            (or ivy-display-function
-               (cdr (or (assq caller ivy-display-functions-alist)
-                        (assq t ivy-display-functions-alist))))))
+               (ivy-alist-setting ivy-display-functions-alist caller))))
         (height
          (or (cdr (assq caller ivy-height-alist))
              ivy-height)))
@@ -1807,6 +1817,8 @@ customizations apply to the current completion session."
                                        (delete item
                                                (cdr (symbol-value hist))))))))
                  (ivy-state-current ivy-last)))
+          ;; Fixes a bug in ESS, #1660
+          (put 'post-command-hook 'permanent-local nil)
           (remove-hook 'post-command-hook #'ivy--queue-exhibit)
           (let ((cleanup (ivy--display-function-prop :cleanup)))
             (when (functionp cleanup)
@@ -1850,9 +1862,7 @@ This is useful for recursive `ivy-read'."
           (or re-builder
               (and (functionp collection)
                    (cdr (assq collection ivy-re-builders-alist)))
-              (and caller
-                   (cdr (assq caller ivy-re-builders-alist)))
-              (cdr (assq t ivy-re-builders-alist))
+              (ivy-alist-setting ivy-re-builders-alist)
               #'ivy--regex))
     (setq ivy--subexps 0)
     (setq ivy--regexp-quote #'regexp-quote)
@@ -1875,6 +1885,9 @@ This is useful for recursive `ivy-read'."
                                 :test #'equal)))
                (setq coll (all-completions "" collection predicate))))
             ((eq collection 'read-file-name-internal)
+             (when (and (equal def initial-input)
+                        (member "./" ivy-extra-directories))
+               (setf (ivy-state-def state) (setq def nil)))
              (setq ivy--directory default-directory)
              (when (and initial-input
                         (not (equal initial-input "")))
@@ -1882,7 +1895,7 @@ This is useful for recursive `ivy-read'."
                       (when (equal (file-name-nondirectory initial-input) "")
                         (setf (ivy-state-preselect state) (setq preselect nil))
                         (setf (ivy-state-def state) (setq def nil)))
-                      (setq ivy--directory initial-input)
+                      (setq ivy--directory (file-name-as-directory initial-input))
                       (setq initial-input nil)
                       (when preselect
                         (let ((preselect-directory
@@ -1922,8 +1935,9 @@ This is useful for recursive `ivy-read'."
                  (progn
                    (setq sort nil)
                    (setq coll (mapcar #'car
-                                      (sort (copy-sequence collection)
-                                            sort-fn))))
+                                      (setf (ivy-state-collection ivy-last)
+                                            (sort (copy-sequence collection)
+                                                  sort-fn)))))
                (setq collection
                      (setf (ivy-state-collection ivy-last)
                            (cl-remove-if-not predicate collection)))
@@ -2193,7 +2207,9 @@ See `completion-in-region' for further information."
                                 prompt
                               (replace-regexp-in-string "%" "%%" prompt))
                             ;; remove 'completions-first-difference face
-                            (mapcar #'substring-no-properties comps)
+                            (mapcar
+                             (lambda (s) (remove-text-properties 0 (length s) '(face) s) s)
+                             comps)
                             ;; predicate was already applied by `completion-all-completions'
                             :predicate nil
                             :initial-input initial
@@ -2488,13 +2504,15 @@ tries to ensure that it does not change depending on the number of candidates."
   (when (display-graphic-p)
     (setq truncate-lines ivy-truncate-lines))
   (setq-local max-mini-window-height ivy-height)
-  (when (and ivy-fixed-height-minibuffer
-             (not (eq (ivy-state-caller ivy-last) 'ivy-completion-in-region)))
-    (set-window-text-height (selected-window)
-                            (+ ivy-height
-                               (if ivy-add-newline-after-prompt
-                                   1
-                                 0))))
+  (if (and ivy-fixed-height-minibuffer
+           (not (eq (ivy-state-caller ivy-last) 'ivy-completion-in-region)))
+      (set-window-text-height (selected-window)
+                              (+ ivy-height
+                                 (if ivy-add-newline-after-prompt
+                                     1
+                                   0)))
+    (when ivy-add-newline-after-prompt
+      (set-window-text-height (selected-window) 2)))
   (add-hook 'post-command-hook #'ivy--queue-exhibit nil t)
   ;; show completions with empty input
   (ivy--exhibit))
@@ -2983,8 +3001,7 @@ All CANDIDATES are assumed to match NAME."
     (cond ((and ivy--flx-featurep
                 (eq ivy--regex-function 'ivy--regex-fuzzy))
            (ivy--flx-sort name candidates))
-          ((setq fun (cdr (or (assq key ivy-sort-matches-functions-alist)
-                              (assq t ivy-sort-matches-functions-alist))))
+          ((setq fun (ivy-alist-setting ivy-sort-matches-functions-alist key))
            (funcall fun name candidates))
           (t
            candidates))))
@@ -3051,9 +3068,9 @@ before substring matches."
   "Recompute index of selected candidate matching NAME.
 RE-STR is the regexp, CANDS are the current candidates."
   (let* ((caller (ivy-state-caller ivy-last))
-         (func (or (and caller (cdr (assoc caller ivy-index-functions-alist)))
-                   (cdr (assoc t ivy-index-functions-alist))
-                   #'ivy-recompute-index-zero))
+         (func (or
+                (ivy-alist-setting ivy-index-functions-alist)
+                #'ivy-recompute-index-zero))
          (case-fold-search (ivy--case-fold-p name))
          (preselect (ivy-state-preselect ivy-last))
          (current (ivy-state-current ivy-last)))
@@ -3332,8 +3349,7 @@ Note: The usual last two arguments are flipped for convenience.")
   (unless ivy--old-re
     (setq ivy--old-re (funcall ivy--regex-function ivy-text)))
   (let ((start
-         (if (and (memq (ivy-state-caller ivy-last)
-                        '(counsel-git-grep counsel-ag counsel-rg counsel-pt))
+         (if (and (memq (ivy-state-caller ivy-last) ivy-highlight-grep-commands)
                   (string-match "^[^:]+:[^:]+:" str))
              (match-end 0)
            0))
@@ -3380,7 +3396,10 @@ Note: The usual last two arguments are flipped for convenience.")
           "mouse-1: %s   mouse-3: %s")
         ivy-mouse-1-tooltip ivy-mouse-3-tooltip))
      str)
-    str))
+    (let ((annotation-function (plist-get completion-extra-properties :annotation-function)))
+      (if annotation-function
+          (concat str (funcall annotation-function str))
+        str))))
 
 (ivy-set-display-transformer
  'counsel-find-file 'ivy-read-file-transformer)
