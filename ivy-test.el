@@ -875,6 +875,47 @@ will bring the behavior in line with the newer Emacsen."
            '(read-directory-name "cd: " "/tmp")
            "RET"))))
 
+(ert-deftest ivy-partial-files ()
+  (when (file-exists-p "/tmp/ivy-partial-test")
+    (delete-directory "/tmp/ivy-partial-test" t))
+  (mkdir "/tmp/ivy-partial-test/test1" t)
+  (mkdir "/tmp/ivy-partial-test/test2")
+  (define-key ivy-minibuffer-map (kbd "TAB") 'ivy-partial)
+  (should
+   (equal
+    (save-window-excursion
+      (condition-case nil
+          (ivy-with
+           '(let ((default-directory "/tmp/ivy-partial-test/"))
+             (counsel-find-file))
+           "t TAB TAB TAB C-g")
+        (quit ivy--old-cands)))
+    '("test1/" "test2/")))
+  (define-key ivy-minibuffer-map (kbd "TAB") 'ivy-partial-or-done)
+  (delete-directory "/tmp/ivy-partial-test" t))
+
+(defun ivy-with-temp-buffer (expr keys)
+  (let ((temp-buffer (generate-new-buffer " *temp*")))
+    (save-window-excursion
+      (unwind-protect
+           (progn
+             (switch-to-buffer temp-buffer)
+             (ivy-with expr keys)
+             (list (point)
+                   (buffer-string)))
+        (and (buffer-name temp-buffer)
+             (kill-buffer temp-buffer))))))
+
+(ert-deftest counsel-yank-pop ()
+  (let ((kill-ring '("foo")))
+    (should (equal
+             (ivy-with-temp-buffer '(counsel-yank-pop) "C-m")
+             '(4 "foo")))
+    (let ((counsel-yank-pop-after-point t))
+      (should (equal
+               (ivy-with-temp-buffer '(counsel-yank-pop) "C-m")
+               '(1 "foo"))))))
+
 (provide 'ivy-test)
 
 ;;; ivy-test.el ends here

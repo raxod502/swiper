@@ -97,19 +97,6 @@ N is obtained from `counsel-more-chars-alist'."
            (executable-find program))
       (user-error "Required program \"%s\" not found in your path" program)))
 
-(make-obsolete-variable
- 'counsel-prompt-function
- 'ivy-set-prompt
- "0.8.0 <2016-06-20 Mon>")
-
-(defcustom counsel-prompt-function #'counsel-prompt-function-default
-  "A function to return a full prompt string from a basic prompt string."
-  :group 'ivy
-  :type '(radio
-          (function-item counsel-prompt-function-default)
-          (function-item counsel-prompt-function-dir)
-          (function :tag "Custom")))
-
 (defun counsel-prompt-function-default ()
   "Return prompt appended with a semicolon."
   (ivy-add-prompt-count
@@ -387,7 +374,8 @@ Update the minibuffer with the amount of lines collected every
       (setq ivy-completion-beg (match-beginning 0))
       (setq ivy-completion-end (match-end 0)))
     (ivy-read "company cand: " company-candidates
-              :action #'ivy-completion-in-region-action)))
+              :action #'ivy-completion-in-region-action
+              :unwind #'company-abort)))
 
 ;;** `counsel-irony'
 (declare-function irony-completion-candidates-async "ext:irony-completion")
@@ -1162,7 +1150,6 @@ selected face."
 INITIAL-INPUT can be given as the initial minibuffer input."
   (interactive)
   (counsel-require-program (car (split-string counsel-git-cmd)))
-  (ivy-set-prompt 'counsel-git counsel-prompt-function)
   (let* ((default-directory (expand-file-name (counsel-locate-git-root)))
          (cands (split-string
                  (shell-command-to-string counsel-git-cmd)
@@ -1172,6 +1159,8 @@ INITIAL-INPUT can be given as the initial minibuffer input."
               :initial-input initial-input
               :action #'counsel-git-action
               :caller 'counsel-git)))
+
+(ivy-set-prompt 'counsel-git #'counsel-prompt-function-default)
 
 (defun counsel-git-action (x)
   "Find file X in current Git repository."
@@ -1364,7 +1353,6 @@ When CMD is a string, use it as a \"git grep\" command.
 When CMD is non-nil, prompt for a specific \"git grep\" command.
 INITIAL-INPUT can be given as the initial minibuffer input."
   (interactive "P")
-  (ivy-set-prompt 'counsel-git-grep counsel-prompt-function)
   (let ((proj-and-cmd (counsel--git-grep-cmd-and-proj cmd))
         proj)
     (setq proj (car proj-and-cmd))
@@ -1397,6 +1385,7 @@ INITIAL-INPUT can be given as the initial minibuffer input."
                 :unwind unwind-function
                 :history 'counsel-git-grep-history
                 :caller 'counsel-git-grep))))
+(ivy-set-prompt 'counsel-git-grep #'counsel-prompt-function-default)
 (cl-pushnew 'counsel-git-grep ivy-highlight-grep-commands)
 
 (defun counsel-git-grep-proj-function (str)
@@ -1506,7 +1495,7 @@ When REVERT is non-nil, regenerate the current *ivy-occur* buffer."
          cands)
     (setq cands (split-string
                  (shell-command-to-string cmd)
-                 "\n"
+                 counsel-async-split-string-re
                  t))
     ;; Need precise number of header lines for `wgrep' to work.
     (insert (format "-*- mode:grep; default-directory: %S -*-\n\n\n"
@@ -1735,9 +1724,28 @@ currently checked out."
         (find-alternate-file file-name)
       (find-file file-name))))
 
+(defun counsel--yes-or-no-p (fmt &rest args)
+  "Ask user a yes or no question created using FMT and ARGS.
+If Emacs 26 user option `read-answer-short' is bound, use it to
+choose between `yes-or-no-p' and `y-or-n-p'; otherwise default to
+`yes-or-no-p'."
+  (funcall (if (and (boundp 'read-answer-short)
+                    (cond ((eq read-answer-short t))
+                          ((eq read-answer-short 'auto)
+                           (eq (symbol-function 'yes-or-no-p) 'y-or-n-p))))
+               #'y-or-n-p
+             #'yes-or-no-p)
+           (apply #'format fmt args)))
+
 (defun counsel-find-file-delete (x)
   "Delete file X."
-  (dired-delete-file x dired-recursive-deletes delete-by-moving-to-trash))
+  (when (or delete-by-moving-to-trash
+            ;; `dired-delete-file', which see, already prompts for directories
+            (eq t (car (file-attributes x)))
+            (counsel--yes-or-no-p "Delete %s? " x))
+    (dired-delete-file x dired-recursive-deletes delete-by-moving-to-trash)
+    (dired-clean-up-after-deletion x)
+    (ivy--reset-state ivy-last)))
 
 (defun counsel-find-file-move (x)
   "Move or rename file X."
@@ -2177,13 +2185,13 @@ string - the full shell command to run."
   (if (and (eq system-type 'windows-nt)
            (fboundp 'w32-shell-execute))
       (w32-shell-execute "open" x)
-    (start-process-shell-command shell-file-name nil
-                                 (format "%s %s"
-                                         (cl-case system-type
-                                           (darwin "open")
-                                           (cygwin "cygstart")
-                                           (t "xdg-open"))
-                                         (shell-quote-argument x)))))
+    (call-process-shell-command (format "%s %s"
+                                        (cl-case system-type
+                                          (darwin "open")
+                                          (cygwin "cygstart")
+                                          (t "xdg-open"))
+                                        (shell-quote-argument x))
+                                nil 0)))
 
 (defalias 'counsel-find-file-extern #'counsel-locate-action-extern)
 
@@ -2238,7 +2246,8 @@ INITIAL-INPUT can be given as the initial minibuffer input."
             :action (lambda (file)
                       (when file
                         (with-ivy-window
-                          (find-file file))))
+                          (find-file
+                           (concat (file-remote-p default-directory) file)))))
             :unwind #'counsel-delete-process
             :caller 'counsel-locate))
 
@@ -2289,7 +2298,6 @@ FZF-PROMPT, if non-nil, is passed as `ivy-read' prompt argument."
     (setq counsel--fzf-dir
           (or initial-directory
               (funcall counsel-fzf-dir-function)))
-    (ivy-set-prompt 'counsel-fzf counsel-prompt-function)
     (ivy-read (or fzf-prompt (concat fzf-basename ": "))
               #'counsel-fzf-function
               :initial-input initial-input
@@ -2529,7 +2537,6 @@ AG-PROMPT, if non-nil, is passed as `ivy-read' prompt argument."
                                      "%s args: "
                                      (car (split-string counsel-ag-command)))))))
   (setq counsel-ag-command (counsel--format-ag-command (or extra-ag-args "") "%s"))
-  (ivy-set-prompt 'counsel-ag counsel-prompt-function)
   (let ((default-directory (or initial-directory
                                (locate-dominating-file default-directory ".git")
                                default-directory)))
@@ -2544,6 +2551,8 @@ AG-PROMPT, if non-nil, is passed as `ivy-read' prompt argument."
                         (counsel-delete-process)
                         (swiper--cleanup))
               :caller 'counsel-ag)))
+
+(ivy-set-prompt 'counsel-ag #'counsel-prompt-function-default)
 (cl-pushnew 'counsel-ag ivy-highlight-grep-commands)
 
 (defun counsel-grep-like-occur (cmd-template)
@@ -2560,7 +2569,9 @@ AG-PROMPT, if non-nil, is passed as `ivy-read' prompt argument."
                        (shell-quote-argument
                         (counsel-unquote-regex-parens
                          (ivy--regex (cdr command-args)))))))
-         (cands (split-string (shell-command-to-string cmd) "\n" t)))
+         (cands (split-string (shell-command-to-string cmd)
+                              counsel-async-split-string-re
+                              t)))
     ;; Need precise number of header lines for `wgrep' to work.
     (insert (format "-*- mode:grep; default-directory: %S -*-\n\n\n"
                     default-directory))
@@ -3530,6 +3541,15 @@ and incorporate `interprogram-paste-function'."
               :test #'equal-including-properties :from-end t)))
   kill-ring)
 
+(defcustom counsel-yank-pop-after-point nil
+  "Whether `counsel-yank-pop' yanks after point.
+Nil means `counsel-yank-pop' puts point at the end of the yanked
+text and mark at its beginning, as per the default \\[yank].
+Non-nil means `counsel-yank-pop' swaps the resulting point and
+mark, as per \\[universal-argument] \\[yank]."
+  :group 'ivy
+  :type 'boolean)
+
 (defun counsel-yank-pop-action (s)
   "Like `yank-pop', but insert the kill corresponding to S.
 Signal a `buffer-read-only' error if called from a read-only
@@ -3541,7 +3561,9 @@ buffer position."
     ;; Avoid unexpected additions to `kill-ring'
     (let (interprogram-paste-function)
       (yank-pop (counsel--yank-pop-position s)))
-    (setq ivy-completion-end (point))))
+    (when (funcall (if counsel-yank-pop-after-point #'> #'<)
+                   (point) (mark t))
+      (exchange-point-and-mark t))))
 
 (defun counsel-yank-pop-action-remove (s)
   "Remove all occurrences of S from the kill ring."
@@ -3585,32 +3607,36 @@ results in the most recent kill being preselected."
   :group 'ivy
   :type 'boolean)
 
+(autoload 'xor "array")
+
 ;;;###autoload
 (defun counsel-yank-pop (&optional arg)
   "Ivy replacement for `yank-pop'.
-ARG has the same meaning as in `yank-pop', but its default value
-can be controlled with `counsel-yank-pop-preselect-last', which
-see.  See also `counsel-yank-pop-filter' for how to filter
-candidates.
+With a plain prefix argument (\\[universal-argument]),
+temporarily toggle the value of `counsel-yank-pop-after-point'.
+Any other value of ARG has the same meaning as in `yank-pop', but
+`counsel-yank-pop-preselect-last' determines its default value.
+See also `counsel-yank-pop-filter' for how to filter candidates.
+
 Note: Duplicate elements of `kill-ring' are always deleted."
   ;; Do not specify `*' to allow browsing `kill-ring' in read-only buffers
   (interactive "P")
-  (let ((ivy-format-function #'counsel--yank-pop-format-function)
-        (kills (counsel--yank-pop-kills)))
-    (unless kills
-      (error "Kill ring is empty or blank"))
+  (let ((kills (or (counsel--yank-pop-kills)
+                   (error "Kill ring is empty or blank")))
+        (preselect (let (interprogram-paste-function)
+                     (current-kill (cond ((nlistp arg)
+                                          (prefix-numeric-value arg))
+                                         (counsel-yank-pop-preselect-last 0)
+                                         (t 1))
+                                   t)))
+        (counsel-yank-pop-after-point
+         (xor (consp arg) counsel-yank-pop-after-point))
+        (ivy-format-function #'counsel--yank-pop-format-function))
     (unless (eq last-command 'yank)
       (push-mark))
-    (setq ivy-completion-beg (mark t))
-    (setq ivy-completion-end (point))
     (ivy-read "kill-ring: " kills
               :require-match t
-              :preselect (let (interprogram-paste-function)
-                           (current-kill (cond
-                                           (arg (prefix-numeric-value arg))
-                                           (counsel-yank-pop-preselect-last 0)
-                                           (t 1))
-                                         t))
+              :preselect preselect
               :action #'counsel-yank-pop-action
               :caller 'counsel-yank-pop)))
 
@@ -3829,11 +3855,13 @@ And insert it into the minibuffer.  Useful during `eval-expression'."
   "Use Ivy to navigate through ELEMENTS."
   (setq ivy-completion-beg (point))
   (setq ivy-completion-end (point))
-  (ivy-read "Symbol name: "
-            (delete-dups
-             (when (> (ring-size elements) 0)
-               (ring-elements elements)))
-            :action #'ivy-completion-in-region-action))
+  (let ((cands
+         (delete-dups
+          (when (> (ring-size elements) 0)
+            (ring-elements elements)))))
+    (ivy-read "Symbol name: " cands
+              :action #'ivy-completion-in-region-action
+              :caller 'counsel-shell-history)))
 
 (defvar eshell-history-ring)
 
@@ -4575,6 +4603,7 @@ selected color."
   '("~/.local/share/applications/"
     "~/.guix-profile/share/applications/"
     "/usr/local/share/applications/"
+    "/var/lib/flatpak/exports/share/applications/"
     "/usr/share/applications/")
   "Directories in which to search for applications (.desktop files)."
   :group 'ivy
@@ -4651,7 +4680,7 @@ This function always returns its elements in a stable order."
         (let ((dir (file-name-as-directory dir)))
           (dolist (file (directory-files-recursively dir ".*\\.desktop$"))
             (let ((id (subst-char-in-string ?/ ?- (file-relative-name file dir))))
-              (unless (gethash id hash)
+              (when (and (not (gethash id hash)) (file-readable-p file))
                 (push (cons id file) result)
                 (puthash id file hash)))))))
     result))
