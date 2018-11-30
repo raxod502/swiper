@@ -249,13 +249,13 @@ will bring the behavior in line with the newer Emacsen."
 
 (ert-deftest ivy--regex-fuzzy ()
   (should (string= (ivy--regex-fuzzy "tmux")
-                   "\\(t\\).*?\\(m\\).*?\\(u\\).*?\\(x\\)"))
+                   "\\(t\\)[^m]*\\(m\\)[^u]*\\(u\\)[^x]*\\(x\\)"))
   (should (string= (ivy--regex-fuzzy ".tmux")
-                   "\\(\\.\\).*?\\(t\\).*?\\(m\\).*?\\(u\\).*?\\(x\\)"))
+                   "\\(\\.\\)[^t]*\\(t\\)[^m]*\\(m\\)[^u]*\\(u\\)[^x]*\\(x\\)"))
   (should (string= (ivy--regex-fuzzy "^tmux")
-                   "^\\(t\\).*?\\(m\\).*?\\(u\\).*?\\(x\\)"))
+                   "^\\(t\\)[^m]*\\(m\\)[^u]*\\(u\\)[^x]*\\(x\\)"))
   (should (string= (ivy--regex-fuzzy "^tmux$")
-                   "^\\(t\\).*?\\(m\\).*?\\(u\\).*?\\(x\\)$"))
+                   "^\\(t\\)[^m]*\\(m\\)[^u]*\\(u\\)[^x]*\\(x\\)$"))
   (should (string= (ivy--regex-fuzzy "")
                    ""))
   (should (string= (ivy--regex-fuzzy "^")
@@ -738,6 +738,13 @@ will bring the behavior in line with the newer Emacsen."
    (equal "c"
           (ivy-with '(ivy-completing-read "Pick: " '("a" "b" "c") nil t nil nil nil)
                     "c RET")))
+  ;; DEF list, empty input (no text collection), non-text default, same object
+  (let ((def '([a b])))
+    (should
+     (eq (car def)
+         (ivy-with
+          (eval `'(ivy-completing-read "Pick: " nil nil 'require-match nil nil ',def))
+          "RET"))))
   ;; DEF nil, and called via `ivy-completing-read-with-empty-string-def'
   (should
    (equal ""
@@ -915,6 +922,22 @@ will bring the behavior in line with the newer Emacsen."
       (should (equal
                (ivy-with-temp-buffer '(counsel-yank-pop) "C-m")
                '(1 "foo"))))))
+
+(ert-deftest ivy-read-file-name-in-buffer-visiting-file ()
+  "Test `ivy-immediate-done' command in `read-file-name' without any editing in
+a buffer visiting a file."
+  (let ((ivy-mode-reset-arg (if ivy-mode 1 0)))
+    (ivy-mode 1)
+    (should
+     (equal "~/dummy-dir/dummy-file" ;visiting file name, abbreviated form
+            (ivy-with
+             '(let ((insert-default-directory t))
+                (with-temp-buffer
+                  (set-visited-file-name "~/dummy-dir/dummy-file")
+                  (read-file-name "Load file: " nil nil 'lambda))) ;load-file
+             ;; No editing, just command ivy-immediate-done
+             "C-M-j")))
+    (ivy-mode ivy-mode-reset-arg)))
 
 (provide 'ivy-test)
 
