@@ -17,7 +17,7 @@
 ;; GNU General Public License for more details.
 
 ;; For a full copy of the GNU General Public License
-;; see <http://www.gnu.org/licenses/>.
+;; see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
@@ -143,7 +143,11 @@ will bring the behavior in line with the newer Emacsen."
            (ivy-with '(ivy-read "pattern: "
                        '("ignore" "build" "build-1" "build-2") :preselect "build")
                      "b C-m")
-           "build")))
+           "build"))
+  (should (equal (ivy-with
+                  '(ivy-read "x: " '("one" "two" ("three" . "four")))
+                  "th C-m")
+                 "three")))
 
 (ert-deftest ivy-read-sort-alist ()
   (should (equal (ivy-with '(let ((coll '(("b" . "1") ("a" . "2"))))
@@ -938,6 +942,37 @@ a buffer visiting a file."
              ;; No editing, just command ivy-immediate-done
              "C-M-j")))
     (ivy-mode ivy-mode-reset-arg)))
+
+(ert-deftest ivy-starts-with-dotslash ()
+  (should (ivy--starts-with-dotslash "./test1"))
+  (should (ivy--starts-with-dotslash ".\\test2"))
+  (should (not (ivy--starts-with-dotslash "test3")))
+  (should (not (ivy--starts-with-dotslash "t/est4")))
+  (should (not (ivy--starts-with-dotslash "t\\est5")))
+  (should (not (ivy--starts-with-dotslash "tes./t6"))))
+
+(ert-deftest counsel--normalize-grep-match ()
+  (with-temp-buffer
+    (let ((match-data-orig
+           (progn
+             (insert "abcd\nefgh")
+             (goto-char (point-min))
+             (re-search-forward "\\(ab\\)\\(cd\\)")
+             (match-data)))
+          input expected out)
+      (dolist (test '(("./FILENAME:1234:32:  TEXT   MORETEXT" .
+                       "./FILENAME:1234:  TEXT   MORETEXT")
+                      ("FILENAME:1234:  TEXT   MORETEXT" .
+                       "./FILENAME:1234:  TEXT   MORETEXT")
+                      ))
+        (setq input (car test))
+        (setq expected (cdr test))
+        (setq out (counsel--normalize-grep-match input))
+        (should (equal out expected))
+        (should (equal match-data-orig (match-data)))
+        (setq out (counsel--normalize-grep-match out))
+        (should (equal out expected))
+        (should (equal match-data-orig (match-data)))))))
 
 (provide 'ivy-test)
 

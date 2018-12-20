@@ -21,7 +21,7 @@
 ;; GNU General Public License for more details.
 
 ;; For a full copy of the GNU General Public License
-;; see <http://www.gnu.org/licenses/>.
+;; see <https://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
@@ -104,6 +104,10 @@
   '((t :inherit dired-directory))
   "Face used by Ivy for highlighting subdirs in the alternatives.")
 
+(defface ivy-org
+  '((t :inherit org-level-4))
+  "Face used by Ivy for highlighting Org buffers in the alternatives.")
+
 (defface ivy-modified-buffer
   '((t :inherit default))
   "Face used by Ivy for highlighting modified file visiting buffers.")
@@ -138,6 +142,22 @@
 (defface ivy-separator
   '((t :inherit font-lock-doc-face))
   "Face for multiline source separator.")
+
+(defface ivy-grep-info
+  '((t :inherit compilation-info))
+  "Face for highlighting grep information such as file names.")
+
+(defface ivy-grep-line-number
+  '((t :inherit compilation-line-number))
+  "Face for displaying line numbers in grep messages.")
+
+(defface ivy-completions-annotations
+  '((t :inherit completions-annotations))
+  "Face for displaying completion annotations.")
+
+(defface ivy-yanked-word
+  '((t :inherit highlight))
+  "Face used to highlight yanked word.")
 
 ;; Set default customization `:group' to `ivy' for the rest of the file.
 (setcdr (assoc load-file-name custom-current-group-alist) 'ivy)
@@ -1878,6 +1898,7 @@ customizations apply to the current completion session."
               (funcall cleanup)))
           (when (setq unwind (ivy-state-unwind ivy-last))
             (funcall unwind))
+          (ivy--pulse-cleanup)
           (unless (eq ivy-exit 'done)
             (ivy-recursive-restore)))
       (ivy-call)
@@ -2003,10 +2024,7 @@ This is useful for recursive `ivy-read'."
                         (ivy-state-buffer state))))
                (setq coll (all-completions "" collection predicate))))
             (t
-             (setq coll
-                   (if predicate
-                       (cl-remove-if-not predicate collection)
-                     collection))))
+             (setq coll (all-completions "" collection predicate))))
       (unless (ivy-state-dynamic-collection ivy-last)
         (setq coll (delete "" coll)))
       (when def
@@ -2716,48 +2734,40 @@ Possible choices are 'ivy-magic-slash-non-match-cd-selected,
 
 (defun ivy--magic-file-slash ()
   "Handle slash when completing file names."
-  (when (or (and (eq this-command 'self-insert-command)
+  (when (or (and (eq this-command #'self-insert-command)
                  (eolp))
-            (eq this-command 'ivy-partial-or-done))
-    (cond ((member ivy-text ivy--all-candidates)
-           (ivy--cd (expand-file-name ivy-text ivy--directory)))
-          ((string-match "//\\'" ivy-text)
-           (if (and default-directory
-                    (string-match "\\`[[:alpha:]]:/" default-directory))
-               (ivy--cd (match-string 0 default-directory))
-             (ivy--cd "/")))
-          ((string-match "\\`/ssh:" ivy-text)
-           (ivy--cd (file-name-directory ivy-text)))
-          ((string-match "[[:alpha:]]:/\\'" ivy-text)
-           (let ((drive-root (match-string 0 ivy-text)))
-             (when (file-exists-p drive-root)
-               (ivy--cd drive-root))))
-          ((and (file-exists-p ivy-text)
-                (not (string= ivy-text "/"))
-                (file-directory-p ivy-text))
-           (ivy--cd (expand-file-name ivy-text)))
-          ((and (or (> ivy--index 0)
-                    (= ivy--length 1)
-                    (not (string= ivy-text "/")))
-                (let ((default-directory ivy--directory))
-                  (and
-                   (not (equal (ivy-state-current ivy-last) ""))
-                   (file-directory-p (ivy-state-current ivy-last))
-                   (file-exists-p (ivy-state-current ivy-last)))))
-           (cond
-             ((or (eq ivy-magic-slash-non-match-action 'ivy-magic-slash-non-match-cd-selected)
-                  (eq this-command 'ivy-partial-or-done))
-              (ivy--cd
-               (expand-file-name (ivy-state-current ivy-last) ivy--directory)))
-
-             ((and (eq ivy-magic-slash-non-match-action 'ivy-magic-slash-non-match-create)
-                   (not (string= ivy-text "/")))
-              (ivy--create-and-cd (expand-file-name ivy-text ivy--directory)))))
-          (t
-           (when (and
-                  (eq ivy-magic-slash-non-match-action 'ivy-magic-slash-non-match-create)
-                  (not (string= ivy-text "/")))
-             (ivy--create-and-cd (expand-file-name ivy-text ivy--directory)))))))
+            (eq this-command #'ivy-partial-or-done))
+    (let ((canonical (expand-file-name ivy-text ivy--directory))
+          (magic (not (string= ivy-text "/"))))
+      (cond ((member ivy-text ivy--all-candidates)
+             (ivy--cd canonical))
+            ((string-match-p "//\\'" ivy-text)
+             (ivy--cd (if (string-match "\\`[[:alpha:]]:/" default-directory)
+                          (match-string 0 default-directory)
+                        "/")))
+            ((string-match-p "\\`/ssh:" ivy-text)
+             (ivy--cd (file-name-directory ivy-text)))
+            ((string-match "[[:alpha:]]:/\\'" ivy-text)
+             (let ((drive-root (match-string 0 ivy-text)))
+               (when (file-exists-p drive-root)
+                 (ivy--cd drive-root))))
+            ((and magic (file-directory-p canonical))
+             (ivy--cd canonical))
+            ((let ((default-directory ivy--directory))
+               (and (or (> ivy--index 0)
+                        (= ivy--length 1)
+                        magic)
+                    (not (equal (ivy-state-current ivy-last) ""))
+                    (file-directory-p (ivy-state-current ivy-last))
+                    (or (eq ivy-magic-slash-non-match-action
+                            'ivy-magic-slash-non-match-cd-selected)
+                        (eq this-command #'ivy-partial-or-done))))
+             (ivy--cd
+              (expand-file-name (ivy-state-current ivy-last) ivy--directory)))
+            ((and (eq ivy-magic-slash-non-match-action
+                      'ivy-magic-slash-non-match-create)
+                  magic)
+             (ivy--create-and-cd canonical))))))
 
 (defcustom ivy-magic-tilde t
   "When non-nil, ~ will move home when selecting files.
@@ -2840,20 +2850,23 @@ Should be run via minibuffer `post-command-hook'."
   (let ((resize-mini-windows nil)
         (update-fn (ivy-state-update-fn ivy-last))
         (old-mark (marker-position (mark-marker)))
+        (win (active-minibuffer-window))
         deactivate-mark)
-    (ivy--cleanup)
-    (when update-fn
-      (funcall update-fn))
-    (ivy--insert-prompt)
-    ;; Do nothing if while-no-input was aborted.
-    (when (stringp text)
-      (if ivy-display-function
-          (funcall ivy-display-function text)
-        (ivy-display-function-fallback text)))
-    (ivy--resize-minibuffer-to-fit)
-    ;; prevent region growing due to text remove/add
-    (when (region-active-p)
-      (set-mark old-mark))))
+    (when win
+      (with-selected-window win
+        (ivy--cleanup)
+        (when update-fn
+          (funcall update-fn))
+        (ivy--insert-prompt)
+        ;; Do nothing if while-no-input was aborted.
+        (when (stringp text)
+          (if ivy-display-function
+              (funcall ivy-display-function text)
+            (ivy-display-function-fallback text)))
+        (ivy--resize-minibuffer-to-fit)
+        ;; prevent region growing due to text remove/add
+        (when (region-active-p)
+          (set-mark old-mark))))))
 
 (defun ivy--resize-minibuffer-to-fit ()
   "Resize the minibuffer window size to fit the text in the minibuffer."
@@ -3434,7 +3447,7 @@ Note: The usual last two arguments are flipped for convenience.")
     (when annot
       (setq str (concat str (funcall annot str)))
       (ivy-add-face-text-property
-       olen (length str) 'completions-annotations str))
+       olen (length str) 'ivy-completions-annotations str))
     str))
 
 (ivy-set-display-transformer
@@ -3535,7 +3548,7 @@ CANDS is a list of strings."
   :type '(repeat (choice regexp function)))
 
 (defvar ivy-switch-buffer-faces-alist '((dired-mode . ivy-subdir)
-                                        (org-mode . org-level-4))
+                                        (org-mode . ivy-org))
   "Store face customizations for `ivy-switch-buffer'.
 Each KEY is `major-mode', each VALUE is a face name.")
 
@@ -3550,7 +3563,9 @@ possible match.  See `all-completions' for further information."
      (lambda (x)
        (let* ((buf (get-buffer x))
               (dir (buffer-local-value 'default-directory buf))
-              (face (if (and dir (file-remote-p (abbreviate-file-name dir)))
+              (face (if (and dir
+                             (ignore-errors
+                               (file-remote-p (abbreviate-file-name dir))))
                         'ivy-remote
                       (cdr (assq (buffer-local-value 'major-mode buf)
                                  ivy-switch-buffer-faces-alist)))))
@@ -3855,7 +3870,7 @@ Skip buffers that match `ivy-ignore-buffers'."
   (let ((b (get-buffer str)))
     (if (and b (buffer-file-name b))
         (cond
-          ((and (not (file-remote-p (buffer-file-name b)))
+          ((and (not (ignore-errors (file-remote-p (buffer-file-name b))))
                 (not (verify-visited-file-modtime b)))
            (ivy-append-face str 'ivy-modified-outside-buffer))
           ((buffer-modified-p b)
@@ -3906,15 +3921,17 @@ The region to extract is determined by the respective values of
 point before and after applying FN to ARGS."
   (let (text)
     (with-ivy-window
-      (let ((pos (point))
+      (let ((beg (point))
             (bol (line-beginning-position))
-            (eol (line-end-position)))
+            (eol (line-end-position))
+            end)
         (unwind-protect
              (progn (apply fn args)
-                    (setq text (buffer-substring-no-properties
-                                pos (goto-char (max bol (min (point) eol))))))
+                    (setq end (goto-char (max bol (min (point) eol))))
+                    (setq text (buffer-substring-no-properties beg end))
+                    (ivy--pulse-region beg end))
           (unless text
-            (goto-char pos)))))
+            (goto-char beg)))))
     (when text
       (insert (replace-regexp-in-string "  +" " " text t t)))))
 
@@ -3941,6 +3958,49 @@ If optional ARG is non-nil, pull in the next ARG
 characters (previous if ARG is negative)."
   (interactive "p")
   (ivy--yank-by #'forward-char arg))
+
+(defvar ivy--pulse-overlay nil
+  "Overlay used to highlight yanked word.")
+
+(defvar ivy--pulse-timer nil
+  "Timer used to dispose of `ivy--pulse-overlay'.")
+
+(defcustom ivy-pulse-delay 0.5
+  "Number of seconds to display `ivy-yanked-word' highlight.
+When nil, disable highlighting."
+  :type '(choice
+          (number :tag "Delay in seconds")
+          (const :tag "Disable" nil)))
+
+(defun ivy--pulse-region (start end)
+  "Temporarily highlight text between START and END.
+The \"pulse\" duration is determined by `ivy-pulse-delay'."
+  (when ivy-pulse-delay
+    (if ivy--pulse-overlay
+        (let ((ostart (overlay-start ivy--pulse-overlay))
+              (oend (overlay-end ivy--pulse-overlay)))
+          (when (< end start)
+            (cl-rotatef start end))
+          ;; Extend the existing overlay's region to include START..END,
+          ;; but only if the two regions are contiguous.
+          (move-overlay ivy--pulse-overlay
+                        (if (= start oend) ostart start)
+                        (if (= end ostart) oend end)))
+      (setq ivy--pulse-overlay (make-overlay start end))
+      (overlay-put ivy--pulse-overlay 'face 'ivy-yanked-word))
+    (when ivy--pulse-timer
+      (cancel-timer ivy--pulse-timer))
+    (setq ivy--pulse-timer
+          (run-at-time ivy-pulse-delay nil #'ivy--pulse-cleanup))))
+
+(defun ivy--pulse-cleanup ()
+  "Cancel `ivy--pulse-timer' and delete `ivy--pulse-overlay'."
+  (when ivy--pulse-timer
+    (cancel-timer ivy--pulse-timer)
+    (setq ivy--pulse-timer nil))
+  (when ivy--pulse-overlay
+    (delete-overlay ivy--pulse-overlay)
+    (setq ivy--pulse-overlay nil)))
 
 (defun ivy-kill-ring-save ()
   "Store the current candidates into the kill ring.
@@ -4052,21 +4112,61 @@ buffer would modify `ivy-last'.")
     (setq mode-name "Ivy-Occur"))
   (force-mode-line-update))
 
+(defun ivy--find-occur-buffer ()
+  (let ((cb (current-buffer)))
+    (cl-find-if
+     (lambda (b)
+       (with-current-buffer b
+         (and (eq major-mode 'ivy-occur-grep-mode)
+              (equal cb (ivy-state-buffer ivy-occur-last)))))
+     (buffer-list))))
+
+(defun ivy--select-occur-buffer ()
+  (let* ((ob (ivy--find-occur-buffer))
+         (ow (cl-find-if (lambda (w) (equal ob (window-buffer w)))
+                         (window-list))))
+    (if ow
+        (select-window ow)
+      (pop-to-buffer ob))))
+
 (defun ivy-occur-next-line (&optional arg)
   "Move the cursor down ARG lines.
 When `ivy-calling' isn't nil, call `ivy-occur-press'."
   (interactive "p")
-  (forward-line arg)
-  (when ivy-calling
-    (ivy-occur-press)))
+  (let ((offset (cond ((derived-mode-p 'ivy-occur-grep-mode) 5)
+                      ((derived-mode-p 'ivy-occur-mode) 2))))
+    (if offset
+        (progn
+          (if (< (line-number-at-pos) offset)
+              (progn
+                (goto-char (point-min))
+                (forward-line (1- offset)))
+            (forward-line arg)
+            (when (eolp)
+              (forward-line -1)))
+          (when ivy-calling
+            (ivy-occur-press)))
+      (ivy--select-occur-buffer)
+      (ivy-occur-next-line arg)
+      (ivy-occur-press-and-switch))))
 
 (defun ivy-occur-previous-line (&optional arg)
   "Move the cursor up ARG lines.
 When `ivy-calling' isn't nil, call `ivy-occur-press'."
   (interactive "p")
-  (forward-line (- arg))
-  (when ivy-calling
-    (ivy-occur-press)))
+  (let ((offset (cond ((derived-mode-p 'ivy-occur-grep-mode) 5)
+                      ((derived-mode-p 'ivy-occur-mode) 2))))
+    (if offset
+        (progn
+          (forward-line (- arg))
+          (when (< (line-number-at-pos) offset)
+            (goto-char (point-min))
+            (forward-line (1- offset)))
+          (when ivy-calling
+            (ivy-occur-press)))
+      (ivy--select-occur-buffer)
+      (ivy-occur-previous-line arg)
+      (ivy-occur-press-and-switch))))
 
 (define-derived-mode ivy-occur-mode fundamental-mode "Ivy-Occur"
   "Major mode for output from \\[ivy-occur].
@@ -4106,6 +4206,9 @@ When `ivy-calling' isn't nil, call `ivy-occur-press'."
 (ivy-set-occur 'ivy-switch-buffer 'ivy-switch-buffer-occur)
 (ivy-set-occur 'ivy-switch-buffer-other-window 'ivy-switch-buffer-occur)
 
+(defun ivy--starts-with-dotslash (str)
+  (string-match-p "\\`\\.[/\\]" str))
+
 (defun ivy--occur-insert-lines (cands)
   "Insert CANDS into `ivy-occur' buffer."
   (font-lock-mode -1)
@@ -4121,13 +4224,9 @@ When `ivy-calling' isn't nil, call `ivy-occur-press'."
             str ?\n))
   (goto-char (point-min))
   (forward-line 4)
-  (while (re-search-forward "^[^:]+:[[:digit:]]+:" nil t)
+  (while (re-search-forward "^.*:[[:digit:]]+:" nil t)
     (ivy-add-face-text-property
-     (match-beginning 0)
-     (match-end 0)
-     'compilation-info
-     nil
-     t)))
+     (match-beginning 0) (match-end 0) 'ivy-grep-info nil t)))
 
 (defun ivy-occur ()
   "Stop completion and put the current candidates into a new buffer.
@@ -4238,13 +4337,14 @@ EVENT gives the mouse position."
 (defun ivy--occur-press-update-window ()
   (cl-case (ivy-state-caller ivy-occur-last)
     ((swiper counsel-git-grep counsel-grep counsel-ag counsel-rg)
-     (let ((window (ivy-state-window ivy-occur-last)))
-       (when (or (null (window-live-p window))
-                 (equal window (selected-window)))
+     (let ((window (ivy-state-window ivy-occur-last))
+           (buffer (ivy-state-buffer ivy-occur-last)))
+       (when (and (or (not (window-live-p window))
+                      (equal window (selected-window)))
+                  (buffer-live-p buffer))
          (save-selected-window
            (setf (ivy-state-window ivy-occur-last)
-                 (display-buffer (ivy-state-buffer ivy-occur-last)
-                                 'display-buffer-pop-up-window))))))
+                 (display-buffer buffer 'display-buffer-pop-up-window))))))
 
     ((counsel-describe-function counsel-describe-variable)
      (setf (ivy-state-window ivy-occur-last)
