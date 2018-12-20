@@ -52,15 +52,20 @@
 (defun counsel-unquote-regex-parens (str)
   "Unquote regexp parentheses in STR."
   (if (consp str)
-      (mapconcat #'car (cl-remove-if-not #'cdr str) ".*")
-    (replace-regexp-in-string "\\\\[(){}]\\|[()]"
+      (mapconcat
+       (lambda (pair)
+         (counsel-unquote-regex-parens (car pair)))
+       (cl-remove-if-not #'cdr str)
+       ".*")
+    (replace-regexp-in-string "\\\\[(){}|]\\|[()]"
                               (lambda (s)
                                 (or (cdr (assoc s '(("\\(" . "(")
                                                     ("\\)" . ")")
                                                     ("(" . "\\(")
                                                     (")" . "\\)")
                                                     ("\\{" . "{")
-                                                    ("\\}" . "}"))))
+                                                    ("\\}" . "}")
+                                                    ("\\|" . "|"))))
                                     (error "Unexpected parenthesis: %S" s)))
                               str t t)))
 
