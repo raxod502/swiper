@@ -1,11 +1,11 @@
 ;;; ivy-hydra.el --- Additional key bindings for Ivy  -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015-2018  Free Software Foundation, Inc.
+;; Copyright (C) 2015-2019  Free Software Foundation, Inc.
 
 ;; Author: Oleh Krehel <ohwoeowho@gmail.com>
 ;; URL: https://github.com/abo-abo/swiper
-;; Version: 0.10.0
-;; Package-Requires: ((emacs "24.1") (ivy "0.9.0") (hydra "0.13.4"))
+;; Version: 0.11.0
+;; Package-Requires: ((emacs "24.1") (ivy "0.11.0") (hydra "0.13.4"))
 ;; Keywords: convenience
 
 ;; This file is part of GNU Emacs.
@@ -46,8 +46,8 @@
   "
 ^ ^ ^ ^ ^ ^ | ^Call^      ^ ^  | ^Cancel^ | ^Options^ | Action _w_/_s_/_a_: %-14s(ivy-action-name)
 ^-^-^-^-^-^-+-^-^---------^-^--+-^-^------+-^-^-------+-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^---------------------------
-^ ^ _k_ ^ ^ | _f_ollow occ_u_r | _i_nsert | _c_: calling %-5s(if ivy-calling \"on\" \"off\") _C_ase-fold: %-10`ivy-case-fold-search
-_h_ ^+^ _l_ | _d_one      ^ ^  | _o_ops   | _m_: matcher %-5s(ivy--matcher-desc)^^^^^^^^^^^^ _t_runcate: %-11`truncate-lines
+^ ^ _k_ ^ ^ | _f_ollow occ_U_r | _i_nsert | _c_: calling %-5s(if ivy-calling \"on\" \"off\") _C_ase-fold: %-10`ivy-case-fold-search
+_h_ ^+^ _l_ | _d_one      ^ ^  | _o_ops   | _M_: matcher %-5s(ivy--matcher-desc)^^^^^^^^^^^^ _T_runcate: %-11`truncate-lines
 ^ ^ _j_ ^ ^ | _g_o        ^ ^  | ^ ^      | _<_/_>_: shrink/grow^^^^^^^^^^^^^^^^^^^^^^^^^^^^ _D_efinition of this menu
 "
   ;; arrows
@@ -55,8 +55,14 @@ _h_ ^+^ _l_ | _d_one      ^ ^  | _o_ops   | _m_: matcher %-5s(ivy--matcher-desc)
   ("j" ivy-next-line)
   ("k" ivy-previous-line)
   ("l" ivy-end-of-buffer)
+  ;; mark
+  ("m" ivy-mark)
+  ("u" ivy-unmark)
+  ("DEL" ivy-unmark-backward)
+  ("t" ivy-toggle-marks)
   ;; actions
   ("o" keyboard-escape-quit :exit t)
+  ("r" ivy-dispatching-done-hydra :exit t)
   ("C-g" keyboard-escape-quit :exit t)
   ("i" nil)
   ("C-o" nil)
@@ -66,15 +72,15 @@ _h_ ^+^ _l_ | _d_one      ^ ^  | _o_ops   | _m_: matcher %-5s(ivy--matcher-desc)
   ("g" ivy-call)
   ("C-m" ivy-done :exit t)
   ("c" ivy-toggle-calling)
-  ("m" ivy-rotate-preferred-builders)
+  ("M" ivy-rotate-preferred-builders)
   (">" ivy-minibuffer-grow)
   ("<" ivy-minibuffer-shrink)
   ("w" ivy-prev-action)
   ("s" ivy-next-action)
   ("a" ivy-read-action)
-  ("t" (setq truncate-lines (not truncate-lines)))
+  ("T" (setq truncate-lines (not truncate-lines)))
   ("C" ivy-toggle-case-fold)
-  ("u" ivy-occur :exit t)
+  ("U" ivy-occur :exit t)
   ("D" (ivy-exit-with-action
         (lambda (_) (find-function 'hydra-ivy/body)))
        :exit t))

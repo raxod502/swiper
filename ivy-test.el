@@ -1,6 +1,6 @@
 ;;; ivy-test.el --- tests for ivy -*- lexical-binding: t -*-
 
-;; Copyright (C) 2015-2018  Free Software Foundation, Inc.
+;; Copyright (C) 2015-2019  Free Software Foundation, Inc.
 
 ;; Author: Oleh Krehel
 
@@ -253,13 +253,13 @@ will bring the behavior in line with the newer Emacsen."
 
 (ert-deftest ivy--regex-fuzzy ()
   (should (string= (ivy--regex-fuzzy "tmux")
-                   "\\(t\\)[^m]*\\(m\\)[^u]*\\(u\\)[^x]*\\(x\\)"))
+                   "\\(t\\)[^m\n]*\\(m\\)[^u\n]*\\(u\\)[^x\n]*\\(x\\)"))
   (should (string= (ivy--regex-fuzzy ".tmux")
-                   "\\(\\.\\)[^t]*\\(t\\)[^m]*\\(m\\)[^u]*\\(u\\)[^x]*\\(x\\)"))
+                   "\\(\\.\\)[^t\n]*\\(t\\)[^m\n]*\\(m\\)[^u\n]*\\(u\\)[^x\n]*\\(x\\)"))
   (should (string= (ivy--regex-fuzzy "^tmux")
-                   "^\\(t\\)[^m]*\\(m\\)[^u]*\\(u\\)[^x]*\\(x\\)"))
+                   "^\\(t\\)[^m\n]*\\(m\\)[^u\n]*\\(u\\)[^x\n]*\\(x\\)"))
   (should (string= (ivy--regex-fuzzy "^tmux$")
-                   "^\\(t\\)[^m]*\\(m\\)[^u]*\\(u\\)[^x]*\\(x\\)$"))
+                   "^\\(t\\)[^m\n]*\\(m\\)[^u\n]*\\(u\\)[^x\n]*\\(x\\)$"))
   (should (string= (ivy--regex-fuzzy "")
                    ""))
   (should (string= (ivy--regex-fuzzy "^")
@@ -325,21 +325,26 @@ will bring the behavior in line with the newer Emacsen."
   (should (equal (ivy--filter "The" '("foo" "the" "The"))
                  '("The"))))
 
-(ert-deftest counsel-unquote-regex-parens ()
-  (should (equal (counsel-unquote-regex-parens
+(ert-deftest counsel--elisp-to-pcre ()
+  (should (equal (counsel--elisp-to-pcre
                   (ivy--regex "foo bar"))
                  "(foo).*?(bar)"))
-  (should (equal (counsel-unquote-regex-parens
+  (should (equal (counsel--elisp-to-pcre
                   (ivy--regex "(foo bar)"))
                  "(\\(foo).*?(bar\\))"))
-  (should (equal (counsel-unquote-regex-parens
+  (should (equal (counsel--elisp-to-pcre
                   (ivy--regex "{foo bar}"))
                  "({foo).*?(bar})"))
-  (should (equal (counsel-unquote-regex-parens "\\{foo bar\\}")
+  (should (equal (counsel--elisp-to-pcre "\\{foo bar\\}")
                  "{foo bar}"))
-  (should (equal (counsel-unquote-regex-parens
+  (should (equal (counsel--elisp-to-pcre "\\(foo\\|bar\\)\\|baz")
+                 "(foo|bar)|baz"))
+  (should (equal (counsel--elisp-to-pcre
                   '(("foo") ("bar" . t) ("baz" . t)))
-                 "bar.*baz")))
+                 "bar.*baz"))
+  (should (equal (counsel--elisp-to-pcre
+                  '(("foo\\|bar" . t) ("blah\\|bloop") ("blick" . t) ("\\(baz\\)\\|quux" . t)))
+                 "(?:foo|bar).*blick.*(?:(baz)|quux)")))
 
 (defmacro ivy--string-buffer (text &rest body)
   "Test helper that wraps TEXT in a temp buffer while running BODY."
